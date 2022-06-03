@@ -50,6 +50,7 @@ import javabridge as jutil
 import bioformats
 from . import metadatatools as metadatatools
 import javabridge as javabridge
+from google.cloud import storage
 import boto3
 
 OMERO_READER_IMPORTED = False
@@ -531,7 +532,6 @@ def get_omero_reader():
     rdr.o = jrdr
     return rdr
 
-
 def load_using_bioformats_url(url, c=None, z=0, t=0, series=None, index=None,
                           rescale = True,
                           wants_max_intensity = False,
@@ -563,13 +563,16 @@ class ImageReader(object):
         self.using_temp_file = False
 
         if url is not None:
+            logging.debug("!!!!!!!!! url is not None: {}".format(url))
             url = str(url)
             if url.lower().startswith(file_scheme):
                 url = url2pathname(url[len(file_scheme):])
                 path = url
 
         self.path = path
+        logging.debug("!!!!!!!!!!!!!!!!!!!!! self.path = {}".format(str(path)))
         if path is None:
+            logging.debug("!!!!!!!!! Path is None")
             if url.lower().startswith("omero:"):
                 while True:
                     #
@@ -609,17 +612,20 @@ class ImageReader(object):
                 #
                 # Other URLS, copy them to a tempfile location
                 #
+                logging.debug("!!!!!!!!!!! url = {}".format(url))
                 filename = self.download(url)
         else:
             if sys.platform.startswith("win"):
                 self.path = self.path.replace("/", os.path.sep)
             filename = os.path.split(path)[1]
+            logging.debug("!!!!!!!!!!! Filename is {}".format(filename))
 
-        if not os.path.isfile(self.path):
-            raise IOError(
-                errno.ENOENT,
-                "The file, \"%s\", does not exist." % path,
-                path)
+        # if not os.path.isfile(self.path):
+        #     logging.debug("!!!!!!!!! is not file")
+        #     raise IOError(
+        #         errno.ENOENT,
+        #         "The file, \"%s\", does not exist." % path,
+        #         path)
 
         self.stream = jutil.make_instance('loci/common/RandomAccessInputStream',
                                           '(Ljava/lang/String;)V',
@@ -674,32 +680,54 @@ class ImageReader(object):
             self.init_reader()
 
     def download(self, url):
+        logging.debug("Inside download method with url: {}".format(url))
         scheme = urlparse(url)[0]
         ext = url[url.rfind("."):]
+        netloc = urlparse(url)[1]
         urlpath = urlparse(url)[2]
         filename = unquote(urlpath.split("/")[-1])
 
+        logging.debug("scheme: {}\nnetloc: {}\nurlpath: {}\nfilename: {}\nURL: {}".format(scheme,netloc,urlpath,filename,url))
         self.using_temp_file = True
 
-        if scheme == 's3':
-            client = boto3.client('s3')
-            bucket_name, key = re.compile('s3://([\w\d\-\.]+)/(.*)').search(url).groups()
-            url = client.generate_presigned_url(
-                'get_object',
-                Params={'Bucket': bucket_name, 'Key': key.replace("+", " ")}
-            )
+        if scheme != 'gs':
+            if scheme == 's3':
+                client = boto3.client('s3')
+                bucket_name, key = re.compile('s3://([\w\d\-\.]+)/(.*)').search(url).groups()
+                url = client.generate_presigned_url(
+                    'get_object',
+                    Params={'Bucket': bucket_name, 'Key': key.replace("+", " ")}
+                )
 
-        src = urlopen(url)
-        dest_fd, self.path = tempfile.mkstemp(suffix=ext)
-        try:
-            with os.fdopen(dest_fd, 'wb') as dest:
-                shutil.copyfileobj(src, dest)
-        except:
-            os.remove(self.path)
-        finally:
-            src.close()
+            src = urlopen(url)
+            dest_fd, self.path = tempfile.mkstemp(suffix=ext)
+            logging.debug("!!!!!!!!!!!!!! destination folder = {}".format(dest_fd))
 
-        return filename
+            try:
+                with os.fdopen(dest_fd, 'wb') as dest:
+                    shutil.copyfileobj(src, dest)
+            except:
+                os.remove(self.path)
+            finally:
+                src.close()
+
+            return filename
+
+        else:
+            # Get default Google Cloud Storage project ID from environment.
+            client = storage.Client(os.environ['GOOGLE_CLOUD_PROJECT'])
+            # Get bucket object from URL.
+            bucket = client.get_bucket(netloc)
+            logging.debug("!!!!!!!! BUCKET NAME: {}".format(bucket.name))
+            # Create a blob object from the filepath
+            urlpath = urlpath.replace("/", "", 1)
+            print("new URL path: {}".format(urlpath))
+            blob = bucket.blob("{}".format(urlpath))
+            # Download the file to temporary directory
+            # dest_fd, self.path = tempfile.mkstemp(suffix=ext)
+
+            blob.download_to_filename("{}/{}".format(os.getcwd(),filename))
+            return filename
 
     def __enter__(self):
         return self

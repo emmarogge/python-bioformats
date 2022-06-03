@@ -169,7 +169,6 @@ def test_load_using_bioformats_url():
     data = bioformats.formatreader.load_using_bioformats_url(url, rescale=False)
     assert data.shape == (640, 640)
 
-
 def test_read_omexml_metadata():
     path = os.path.join(os.path.dirname(__file__), 'resources', 'Channel1-01-A-01.tif')
     xml = bioformats.formatreader.get_omexml_metadata(path)
